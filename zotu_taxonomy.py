@@ -3,8 +3,9 @@
 zOTU -> species-level taxonomy against 16S rRNA type-strain sequences.
 
 Workflow
-  1. Downloads (once) the NCBI RefSeq 16S rRNA "Targeted Loci" collection
-     (bacteria + archaea, curated, mostly type material) and vsearch.
+  1. Downloads (once) the reference database: NCBI RefSeq 16S rRNA "Targeted Loci"
+     (default; bacteria + archaea, curated, mostly type material) or the type
+     strains of SILVA Ref NR99 (--db silva); and vsearch.
   2. Trims leftover degenerate primer bases (auto-detected).
   3. Global alignment of every zOTU with vsearch (--usearch_global).
   4. Keeps the best hit per species, ranks species by % identity and
@@ -44,6 +45,17 @@ DB_URLS = [
     "https://ftp.ncbi.nlm.nih.gov/refseq/TargetedLoci/Bacteria/bacteria.16SrRNA.fna.gz",
     "https://ftp.ncbi.nlm.nih.gov/refseq/TargetedLoci/Archaea/archaea.16SrRNA.fna.gz",
 ]
+SILVA_RELEASE = "144"
+SILVA_URL = ("https://www.arb-silva.de/fileadmin/silva_databases/release_{r}/Exports/"
+             .format(r=SILVA_RELEASE))
+SILVA_FILES = (SILVA_URL + f"SILVA_{SILVA_RELEASE}_SSURef_NR99_tax_silva_trunc.fasta.gz",
+               SILVA_URL + f"full_metadata/SILVA_{SILVA_RELEASE}_SSURef_Nr99.full_metadata.gz")
+
+# Reference databases (key -> description shown in the output)
+DATABASES = {
+    "ncbi": "NCBI RefSeq 16S rRNA Targeted Loci (bacteria + archaea)",
+    "silva": f"SILVA {SILVA_RELEASE} SSU Ref NR99, type strains only (bacteria + archaea)",
+}
 
 # Identity thresholds (Yarza et al. 2014, Nat Rev Microbiol; Kim et al. 2014, IJSEM).
 # NOTE: defined for full-length 16S; for short amplicons they are only indicative.
@@ -87,7 +99,16 @@ def download(url, dest, log=print):
     log(f"  downloading {url}")
     tmp = dest + ".part"
     with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f)
+        total = int(r.headers.get("Content-Length") or 0)
+        done, step = 0, 50 * 2**20
+        while True:
+            chunk = r.read(2**20)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if total > step and done // step != (done - len(chunk)) // step:
+                log(f"    {done / 2**20:.0f} / {total / 2**20:.0f} MB")
     os.replace(tmp, dest)
 
 
@@ -151,46 +172,134 @@ def parse_ncbi_name(description):
     return " ".join(name).strip("'\"")
 
 
-def db_paths():
+# SILVA organism names that are not a species (the last field of a SILVA header is the
+# organism name of the source entry, e.g. "uncultured bacterium" or "Streptomyces sp. JA03")
+SILVA_NO_SPECIES = re.compile(
+    r"(?i)^(uncultured|unidentified|unclassified|unknown)\b|\bmetagenome\b|\bsp\.(\s|$)"
+    r"|\b(bacterium|archaeon|eubacterium|symbiont|endosymbiont|clone)\b")
+
+
+def silva_species(taxonomy):
+    """'Bacteria;...;Lactiplantibacillus;Lactiplantibacillus plantarum JCM 1149'
+    -> 'Lactiplantibacillus plantarum'; None for eukaryotes, organelles and entries
+    without a species name."""
+    path = taxonomy.split(";")
+    if path[0] not in ("Bacteria", "Archaea") or "Chloroplast" in path or "Mitochondria" in path:
+        return None
+    name = path[-1]
+    if SILVA_NO_SPECIES.search(name) or len(name.split()) < 2:
+        return None
+    return parse_ncbi_name("x " + name)
+
+
+def silva_genus_agrees(species, taxonomy):
+    """Is the genus of the species name among the genera of SILVA's genus rank
+    (e.g. 'Burkholderia-Caballeronia-Paraburkholderia', 'Paenibacillus--other')?"""
+    words = species.split()
+    genus = (words[1] if words[0] == "Candidatus" else words[0]).strip("[]'\"")
+    rank = taxonomy.split(";")[-2].replace("--other", "")
+    return genus in re.split(r"[-+]", rank)
+
+
+def db_paths(db="ncbi"):
     d = os.path.join(data_dir(), "db")
-    return (d, os.path.join(d, "ncbi_16S_refs.fasta"),
-            os.path.join(d, "ncbi_16S_names.tsv"), os.path.join(d, "DB_DATE.txt"))
+    if db == "ncbi":  # original file names, so existing downloads keep working
+        return (d, os.path.join(d, "ncbi_16S_refs.fasta"),
+                os.path.join(d, "ncbi_16S_names.tsv"), os.path.join(d, "DB_DATE.txt"))
+    tag = f"silva{SILVA_RELEASE}_types"
+    return (d, os.path.join(d, tag + "_refs.fasta"), os.path.join(d, tag + "_names.tsv"),
+            os.path.join(d, f"DB_DATE_{tag}.txt"))
 
 
-def db_date():
-    _d, _f, _n, date_file = db_paths()
+def db_date(db="ncbi"):
+    _d, _f, _n, date_file = db_paths(db)
     if os.path.exists(date_file):
         with open(date_file) as f:
             return f.read().strip()
     return None
 
 
-def ensure_db(update=False, log=print):
+def _build_ncbi(db_dir, fo, w, log):
+    log("Downloading the NCBI 16S reference database:")
+    n = 0
+    for url in DB_URLS:
+        gz = os.path.join(db_dir, os.path.basename(url))
+        download(url, gz, log)
+        with gzip.open(gz, "rt", encoding="utf-8", errors="replace") as fi:
+            for line in fi:
+                if line.startswith(">"):
+                    desc = line[1:].strip()
+                    acc = desc.split()[0]
+                    w.writerow([acc, parse_ncbi_name(desc), desc])
+                    fo.write(f">{acc}\n")
+                    n += 1
+                else:
+                    fo.write(line.strip().upper() + "\n")
+        os.remove(gz)
+    return n
+
+
+def _build_silva(db_dir, fo, w, log):
+    """Type strains of SILVA Ref NR99: entries flagged [T] in the 'flags' column of the
+    full metadata, restricted to bacteria/archaea with a species name."""
+    log(f"Downloading SILVA {SILVA_RELEASE} (about 400 MB, only once):")
+    fasta_gz, meta_gz = (os.path.join(db_dir, os.path.basename(u)) for u in SILVA_FILES)
+    for url, dest in zip(SILVA_FILES, (fasta_gz, meta_gz)):
+        download(url, dest, log)
+    log("  selecting type strains")
+    types = set()
+    with gzip.open(meta_gz, "rt", encoding="utf-8", errors="replace") as fi:
+        cols = fi.readline().rstrip("\n").split("\t")
+        acc, start, stop, flags = (cols.index(c) for c in ("acc", "start", "stop", "flags"))
+        for line in fi:
+            r = line.rstrip("\n").split("\t")
+            if len(r) > flags and "[T]" in r[flags]:
+                types.add(f"{r[acc]}.{r[start]}.{r[stop]}")
+    if not types:
+        raise RuntimeError("No type strains found in the SILVA metadata (format changed?)")
+    refs, cur = [], None  # [sid, species, taxonomy, sequence lines]
+    with gzip.open(fasta_gz, "rt", encoding="utf-8", errors="replace") as fi:
+        for line in fi:
+            if line.startswith(">"):
+                sid, _, tax = line[1:].rstrip("\n").partition(" ")
+                species = silva_species(tax) if sid in types else None
+                cur = [sid, species, tax, []] if species else None
+                if cur:
+                    refs.append(cur)
+            elif cur:
+                cur[3].append(line.strip().upper().replace("U", "T"))
+    # An entry whose species name disagrees with the genus SILVA places it in is usually
+    # either a reclassified species (all its entries disagree: keep) or a mislabelled
+    # deposit (other entries of the same species agree: drop).
+    agree = [silva_genus_agrees(r[1], r[2]) for r in refs]
+    good = {r[1] for r, a in zip(refs, agree) if a}
+    kept = [r for r, a in zip(refs, agree) if a or r[1] not in good]
+    for sid, species, tax, seq in kept:
+        w.writerow([sid, species, tax])
+        fo.write(f">{sid}\n" + "\n".join(seq) + "\n")
+    n = len(kept)
+    log(f"  {len(types)} sequences flagged as type strain; {len(refs)} bacteria/archaea "
+        f"with a species name; {len(refs) - n} dropped as likely mislabelled; {n} kept")
+    for p in (fasta_gz, meta_gz):
+        os.remove(p)
+    return n
+
+
+def ensure_db(update=False, log=print, db="ncbi"):
     """Returns (fasta_path, names_tsv_path). Builds them on first run."""
-    db_dir, fasta, names, date_file = db_paths()
+    if db not in DATABASES:
+        raise RuntimeError(f"Unknown database '{db}' (choose from: {', '.join(DATABASES)})")
+    db_dir, fasta, names, date_file = db_paths(db)
     os.makedirs(db_dir, exist_ok=True)
     if os.path.exists(fasta) and os.path.exists(names) and not update:
         return fasta, names
 
-    log("Downloading the NCBI 16S reference database:")
-    n = 0
-    with open(fasta + ".part", "w") as fo, open(names + ".part", "w", newline="") as fn:
+    build = _build_ncbi if db == "ncbi" else _build_silva
+    with open(fasta + ".part", "w") as fo, \
+            open(names + ".part", "w", newline="", encoding="utf-8") as fn:
         w = csv.writer(fn, delimiter="\t")
         w.writerow(["accession", "species", "description"])
-        for url in DB_URLS:
-            gz = os.path.join(db_dir, os.path.basename(url))
-            download(url, gz, log)
-            with gzip.open(gz, "rt") as fi:
-                for line in fi:
-                    if line.startswith(">"):
-                        desc = line[1:].strip()
-                        acc = desc.split()[0]
-                        w.writerow([acc, parse_ncbi_name(desc), desc])
-                        fo.write(f">{acc}\n")
-                        n += 1
-                    else:
-                        fo.write(line.strip().upper() + "\n")
-            os.remove(gz)
+        n = build(db_dir, fo, w, log)
     os.replace(fasta + ".part", fasta)
     os.replace(names + ".part", names)
     with open(date_file, "w") as f:
@@ -269,7 +378,7 @@ def run_vsearch(vsearch, query, db, out, threads, min_id, min_cov, maxaccepts, m
 
 def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, tie_delta):
     acc2sp = {}
-    with open(names_tsv) as f:
+    with open(names_tsv, encoding="utf-8", errors="replace") as f:
         for row in csv.DictReader(f, delimiter="\t"):
             acc2sp[row["accession"]] = row["species"]
 
@@ -385,7 +494,7 @@ def write_output(results, out_path, top_n, settings, log=print):
 # --------------------------------------------------------------------------- #
 DEFAULTS = dict(top=5, threads=os.cpu_count() or 2, species_id=SPECIES_ID, genus_id=GENUS_ID,
                 min_id=80.0, min_cov=0.9, tie_delta=0.0, maxaccepts=200, maxrejects=2000,
-                trim="auto", db_fasta=None, update_db=False, keep_intermediate=False)
+                trim="auto", db="ncbi", db_fasta=None, update_db=False, keep_intermediate=False)
 
 
 def run_pipeline(fasta, output=None, log=print, progress=None, **options):
@@ -397,7 +506,8 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
     if o["db_fasta"]:
         db_fasta = o["db_fasta"]
         names = base + "_custom_names.tsv"
-        with open(db_fasta) as fi, open(names, "w", newline="") as fn:
+        with open(db_fasta, encoding="utf-8", errors="replace") as fi, \
+                open(names, "w", newline="", encoding="utf-8") as fn:
             w = csv.writer(fn, delimiter="\t")
             w.writerow(["accession", "species", "description"])
             for line in fi:
@@ -406,8 +516,8 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
                     w.writerow([d.split()[0], parse_ncbi_name(d), d])
         date = "custom"
     else:
-        db_fasta, names = ensure_db(o["update_db"], log)
-        date = db_date()
+        db_fasta, names = ensure_db(o["update_db"], log, o["db"])
+        date = db_date(o["db"])
 
     seqs = read_fasta(fasta)
     if not seqs:
@@ -442,8 +552,7 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
 
     settings = {
         "Input": os.path.abspath(fasta),
-        "Reference database": db_fasta if o["db_fasta"] else
-            "NCBI RefSeq 16S rRNA Targeted Loci (bacteria + archaea)",
+        "Reference database": db_fasta if o["db_fasta"] else DATABASES[o["db"]],
         "Database downloaded": date,
         "Aligner": "vsearch --usearch_global (global alignment, terminal gaps ignored), strand both",
         "Species threshold (%)": o["species_id"],
@@ -485,9 +594,12 @@ def main():
     p.add_argument("--maxrejects", type=int, default=DEFAULTS["maxrejects"])
     p.add_argument("--trim", default="auto",
                    help="primer remnants: 'auto' (default), 'none', or 'LEFT,RIGHT' bases e.g. 7,9")
-    p.add_argument("--db-fasta", help="use your own reference FASTA instead of NCBI "
+    p.add_argument("--db", choices=list(DATABASES), default=DEFAULTS["db"],
+                   help="reference database: 'ncbi' (default) or 'silva' "
+                        f"(SILVA {SILVA_RELEASE} type strains, ~400 MB download once)")
+    p.add_argument("--db-fasta", help="use your own reference FASTA instead "
                    "(headers: >accession Genus species ...)")
-    p.add_argument("--update-db", action="store_true", help="re-download the NCBI database")
+    p.add_argument("--update-db", action="store_true", help="re-download the selected database")
     p.add_argument("--keep-intermediate", action="store_true",
                    help="keep the trimmed query FASTA and raw vsearch hits")
     a = p.parse_args()
