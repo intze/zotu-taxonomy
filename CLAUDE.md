@@ -50,7 +50,8 @@ runs it on Windows via the GUI. See README.md for usage and method.
    --add-data), built from bac120/ar53_metadata_r232: 5,900 'unverifiable' (ssu_reps 16S on another
    contig than ssu_query_id) + 1,172 'class_conflict' (SILVA class of the 16S in <5% of that GTDB
    class, >=95% identity). Same-class contamination is not caught (Stenotrophomonas tie with E. coli).
-   Regenerate the list if GTDB_RELEASE changes. Frozen-exe loading of the list is untested.
+   Regenerate the list if GTDB_RELEASE changes. Bundled lookup (resource_path/_MEIPASS) verified in a
+   Linux PyInstaller test app; the exe self-test fails if the list is not bundled.
    LTP dropped (user's decision): moved to https://bioinfo.uib.es/ltp/, downloads need an e-mail
    request via biocom.uib.es (blocked); no plain file links. The user wants one PR to `main`
    with all new databases, so the exe gets the coverage option and databases together.

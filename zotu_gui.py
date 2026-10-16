@@ -268,6 +268,8 @@ def selftest(fasta, output):
     """Headless run used by the build to check the packaged .exe (no window)."""
     with open(output + ".log", "w", encoding="utf-8") as log:
         try:
+            if not os.path.exists(zt.resource_path(zt.GTDB_EXCLUDED)):
+                raise RuntimeError(f"{zt.GTDB_EXCLUDED} is not bundled")
             zt.run_pipeline(fasta, output, log=lambda t: print(t, file=log, flush=True))
         except Exception as e:
             print(f"FAILED: {type(e).__name__}: {e}", file=log)
