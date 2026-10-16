@@ -33,7 +33,8 @@ runs it on Windows via the GUI. See README.md for usage and method.
   mislabels (name genus ≠ SILVA genus while other entries of that species agree). The last header field
   is the ENA organism name, not a curated species (full NR99 had e.g. Pseudomonas;Rhizoctonia solani).
   Flag prefixes (l, r, s, p, n, w) are undocumented. Strict genus-consistency would lose 1,912 species
-  (mostly reclassifications), so it is not used. Example run: SILVA and NCBI agree on genus for all 5.
+  (mostly reclassifications), so it is not used. Example (5 zOTUs): Zotu3/4 same Species; Zotu1/5 tie sets differ slightly; Zotu2 is B. subtilis
+  100% in NCBI but 99.8% in SILVA (9 Bacillus tied), i.e. a sequence difference between records.
 
 ## Open decisions / next steps
 1. Tie tolerance default (`--tie-delta`, GUI "Ανοχή ισοπαλίας") is 0. Recommended 0.3
