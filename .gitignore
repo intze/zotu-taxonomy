@@ -1,0 +1,9 @@
+db/
+tools/
+build/
+dist/
+*.spec
+__pycache__/
+*_taxonomy.xlsx
+*_taxonomy*.csv
+*.log
