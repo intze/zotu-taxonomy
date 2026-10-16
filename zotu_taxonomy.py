@@ -50,11 +50,20 @@ SILVA_URL = ("https://www.arb-silva.de/fileadmin/silva_databases/release_{r}/Exp
              .format(r=SILVA_RELEASE))
 SILVA_FILES = (SILVA_URL + f"SILVA_{SILVA_RELEASE}_SSURef_NR99_tax_silva_trunc.fasta.gz",
                SILVA_URL + f"full_metadata/SILVA_{SILVA_RELEASE}_SSURef_Nr99.full_metadata.gz")
+GTDB_RELEASE = "232"
+GTDB_URL = (f"https://data.gtdb.ecogenomic.org/releases/release{GTDB_RELEASE}/{GTDB_RELEASE}.0/"
+            "genomic_files_reps/")
+GTDB_FILES = (GTDB_URL + f"bac120_ssu_reps_r{GTDB_RELEASE}.fna.gz",
+              GTDB_URL + f"ar53_ssu_reps_r{GTDB_RELEASE}.fna.gz")
+# GTDB names species without a Latin name after a genome, e.g. 'UBA1847 sp963842765'
+PLACEHOLDER = re.compile(r"^\S+ sp\d+u?$")
 
 # Reference databases (key -> description shown in the output)
 DATABASES = {
     "ncbi": "NCBI RefSeq 16S rRNA Targeted Loci (bacteria + archaea)",
     "silva": f"SILVA {SILVA_RELEASE} SSU Ref NR99, type strains only (bacteria + archaea)",
+    "gtdb": f"GTDB R{GTDB_RELEASE} 16S of species representative genomes (bacteria + archaea; "
+            "GTDB names, including placeholder species from uncultured genomes)",
 }
 
 # Identity thresholds (Yarza et al. 2014, Nat Rev Microbiol; Kim et al. 2014, IJSEM).
@@ -206,7 +215,7 @@ def db_paths(db="ncbi"):
     if db == "ncbi":  # original file names, so existing downloads keep working
         return (d, os.path.join(d, "ncbi_16S_refs.fasta"),
                 os.path.join(d, "ncbi_16S_names.tsv"), os.path.join(d, "DB_DATE.txt"))
-    tag = f"silva{SILVA_RELEASE}_types"
+    tag = f"gtdb{GTDB_RELEASE}_reps" if db == "gtdb" else f"silva{SILVA_RELEASE}_types"
     return (d, os.path.join(d, tag + "_refs.fasta"), os.path.join(d, tag + "_names.tsv"),
             os.path.join(d, f"DB_DATE_{tag}.txt"))
 
@@ -285,6 +294,29 @@ def _build_silva(db_dir, fo, w, log):
     return n
 
 
+def _build_gtdb(db_dir, fo, w, log):
+    """One 16S per GTDB species (the longest copy in its representative genome).
+    Header: >RS_GCF_000001.1 d__Bacteria;...;g__Genus;s__Genus species [locus_tag=...] ..."""
+    log(f"Downloading GTDB R{GTDB_RELEASE} 16S (about 31 MB):")
+    n = 0
+    for url in GTDB_FILES:
+        gz = os.path.join(db_dir, os.path.basename(url))
+        download(url, gz, log)
+        with gzip.open(gz, "rt", encoding="utf-8", errors="replace") as fi:
+            for line in fi:
+                if line.startswith(">"):
+                    acc, _, rest = line[1:].rstrip("\n").partition(" ")
+                    tax = rest.split(" [")[0]
+                    species = tax.rpartition(";s__")[2].strip() or "unknown"
+                    w.writerow([acc, species, tax])
+                    fo.write(f">{acc}\n")
+                    n += 1
+                else:
+                    fo.write(line.strip().upper() + "\n")
+        os.remove(gz)
+    return n
+
+
 def ensure_db(update=False, log=print, db="ncbi"):
     """Returns (fasta_path, names_tsv_path). Builds them on first run."""
     if db not in DATABASES:
@@ -294,7 +326,7 @@ def ensure_db(update=False, log=print, db="ncbi"):
     if os.path.exists(fasta) and os.path.exists(names) and not update:
         return fasta, names
 
-    build = _build_ncbi if db == "ncbi" else _build_silva
+    build = {"ncbi": _build_ncbi, "silva": _build_silva, "gtdb": _build_gtdb}[db]
     with open(fasta + ".part", "w") as fo, \
             open(names + ".part", "w", newline="", encoding="utf-8") as fn:
         w = csv.writer(fn, delimiter="\t")
@@ -376,7 +408,8 @@ def run_vsearch(vsearch, query, db, out, threads, min_id, min_cov, maxaccepts, m
         raise RuntimeError("vsearch failed:\n" + "\n".join(tail))
 
 
-def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, tie_delta):
+def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, tie_delta,
+             no_hit="No type strain >= min identity"):
     acc2sp = {}
     with open(names_tsv, encoding="utf-8", errors="replace") as f:
         for row in csv.DictReader(f, delimiter="\t"):
@@ -400,7 +433,7 @@ def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, t
         top = ranked[:top_n]
         row = {"zOTU": q, "length": lengths[q], "hits": top}
         if not ranked:
-            row.update(best_id=None, n_tied=0, status="No type strain >= min identity",
+            row.update(best_id=None, n_tied=0, status=no_hit,
                        assigned_species="", assigned_genus="")
             results.append(row)
             continue
@@ -411,6 +444,8 @@ def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, t
         if best_id >= species_id:
             if len(tied) == 1:
                 status, species = "Species", tied[0]
+                if PLACEHOLDER.match(species):
+                    status = "Species (GTDB placeholder)"
             else:
                 status = f"Ambiguous: {len(tied)} species tied"
                 species = " / ".join(tied[:top_n]) + (" / ..." if len(tied) > top_n else "")
@@ -461,7 +496,9 @@ def write_output(results, out_path, top_n, settings, log=print):
         return base + "_summary.csv"
 
     wb = openpyxl.Workbook()
-    fills = {"Species": "C6EFCE", "Ambiguous": "FFEB9C", "Genus": "DDEBF7"}
+    # checked in order, the last matching key wins
+    fills = {"Species": "C6EFCE", "Species (GTDB placeholder)": "E4DFEC",
+             "Ambiguous": "FFEB9C", "Genus": "DDEBF7"}
     for title, h, rows in (("Summary", header, summary), ("Top hits", long_header, long_rows)):
         ws = wb.active if title == "Summary" else wb.create_sheet(title)
         ws.title = title
@@ -542,8 +579,10 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
     hits = base + "_vsearch_hits.tsv"
     run_vsearch(vsearch, query, db_fasta, hits, o["threads"], o["min_id"], o["min_cov"],
                 o["maxaccepts"], o["maxrejects"], log, progress)
+    no_hit = ("No reference >= min identity" if o["db"] == "gtdb" and not o["db_fasta"]
+              else "No type strain >= min identity")
     results = classify(hits, names, order, lengths, o["top"], o["species_id"],
-                       o["genus_id"], o["tie_delta"])
+                       o["genus_id"], o["tie_delta"], no_hit)
 
     counts = defaultdict(int)
     for r in results:
@@ -595,8 +634,9 @@ def main():
     p.add_argument("--trim", default="auto",
                    help="primer remnants: 'auto' (default), 'none', or 'LEFT,RIGHT' bases e.g. 7,9")
     p.add_argument("--db", choices=list(DATABASES), default=DEFAULTS["db"],
-                   help="reference database: 'ncbi' (default) or 'silva' "
-                        f"(SILVA {SILVA_RELEASE} type strains, ~400 MB download once)")
+                   help="reference database: 'ncbi' (default), 'silva' "
+                        f"(SILVA {SILVA_RELEASE} type strains, ~400 MB download once) or 'gtdb' "
+                        f"(GTDB R{GTDB_RELEASE} species representatives, GTDB names)")
     p.add_argument("--db-fasta", help="use your own reference FASTA instead "
                    "(headers: >accession Genus species ...)")
     p.add_argument("--update-db", action="store_true", help="re-download the selected database")

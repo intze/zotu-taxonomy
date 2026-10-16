@@ -42,12 +42,19 @@ runs it on Windows via the GUI. See README.md for usage and method.
    Waiting for the user's choice.
 2. Compare with EzBioCloud on 10–20 zOTUs the user already identified there.
 3. Confirm the Windows exe opens and shows Greek correctly on the user's PC.
-4. More databases requested: GTDB (r232 reachable; names are GTDB, not LPSN) and LTP
-   (`imedea.uib-csic.es` not reachable from the session so far). The user wants one PR to `main`
+4. More databases requested. GTDB R232 is in (`--db gtdb`): bac120+ar53 `ssu_reps` (93,770 seqs,
+   ~68.9k placeholder species `Genus spNNN[u]` -> status "Species (GTDB placeholder)", purple fill).
+   OPEN PROBLEM: contaminating 16S in GTDB genomes (GTDB warns about it). On the example, Staph/E. coli/
+   P. aeruginosa tie at 100% with Alphaproteobacteria/Collinsella; B. subtilis has 26 Actinomycetes vs
+   21 Bacilli hits within 1%, so a majority rule fails. Self-search at 99% takes hours (not usable).
+   Proposed: compare `ssu_silva_taxonomy` vs `gtdb_taxonomy` (phylum/class) from
+   bac120/ar53_metadata_r232.tsv.gz (~283 MB); waiting for the user: precomputed exclusion list in
+   the repo (a) vs download on the user's PC (b).
+   LTP moved to https://bioinfo.uib.es/ltp/ (old imedea URL redirects); the proxy still rejects it. The user wants one PR to `main`
    with all new databases, so the exe gets the coverage option and databases together.
 
 ## Environment notes (Claude Code cloud sessions)
-- `ftp.ncbi.nlm.nih.gov`, `www.arb-silva.de`, `data.gtdb.ecogenomic.org` must be in the environment's
+- `ftp.ncbi.nlm.nih.gov`, `www.arb-silva.de`, `data.gtdb.ecogenomic.org`, `bioinfo.uib.es` must be in the environment's
   allowed domains to download the databases.
 - Pushing git tags was blocked from the session; releases are therefore published by the workflow
   from `main`. GitHub Actions logs/artifacts are not downloadable from the session (proxy 403);
