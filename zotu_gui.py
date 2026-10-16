@@ -12,7 +12,10 @@ from tkinter import filedialog, messagebox, ttk
 
 import zotu_taxonomy as zt
 
-APP_TITLE = "zOTU Taxonomy (NCBI 16S type strains)"
+APP_TITLE = "zOTU Taxonomy (16S type strains)"
+DB_LABELS = {"ncbi": "NCBI RefSeq (type strains)", "silva": f"SILVA {zt.SILVA_RELEASE} (type strains)",
+             "gtdb": f"GTDB R{zt.GTDB_RELEASE} (και placeholder)"}
+DB_SIZES = {"ncbi": "~8 MB", "silva": "~400 MB, μία φορά", "gtdb": "~31 MB"}
 
 
 def open_path(path):
@@ -41,8 +44,10 @@ class App(tk.Tk):
         self.species_id = tk.DoubleVar(value=zt.SPECIES_ID)
         self.genus_id = tk.DoubleVar(value=zt.GENUS_ID)
         self.tie_delta = tk.DoubleVar(value=0.0)
+        self.min_cov = tk.DoubleVar(value=zt.DEFAULTS["min_cov"])
         self.threads = tk.IntVar(value=zt.DEFAULTS["threads"])
         self.trim = tk.BooleanVar(value=True)
+        self.db = tk.StringVar(value=DB_LABELS[zt.DEFAULTS["db"]])
 
         self._build()
         self._refresh_db_label()
@@ -69,6 +74,7 @@ class App(tk.Tk):
             ("Όριο γένους (%):", self.genus_id, 80, 100, 0.1),
             ("Ανοχή ισοπαλίας (%):", self.tie_delta, 0, 3, 0.1),
             ("Threads (πυρήνες):", self.threads, 1, max(os.cpu_count() or 1, 1), 1),
+            ("Ελάχ. κάλυψη zOTU (0-1):", self.min_cov, 0.5, 1.0, 0.01),
         ]
         for i, (label, var, lo, hi, step) in enumerate(rows):
             r, c = divmod(i, 2)
@@ -76,13 +82,18 @@ class App(tk.Tk):
             ttk.Spinbox(opts, textvariable=var, from_=lo, to=hi, increment=step,
                         width=8).grid(row=r, column=c * 2 + 1, sticky="w", **pad)
         ttk.Checkbutton(opts, text="Αυτόματο κόψιμο υπολειμμάτων primer",
-                        variable=self.trim).grid(row=2, column=2, columnspan=2, sticky="w", **pad)
+                        variable=self.trim).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
 
         db = ttk.Frame(self)
         db.pack(fill="x", **pad)
+        ttk.Label(db, text="Βάση αναφοράς:").pack(side="left")
+        self.db_box = ttk.Combobox(db, textvariable=self.db, values=list(DB_LABELS.values()),
+                                   state="readonly", width=24)
+        self.db_box.pack(side="left", padx=8)
+        self.db_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh_db_label())
         self.db_label = ttk.Label(db, text="")
         self.db_label.pack(side="left")
-        self.update_btn = ttk.Button(db, text="Ενημέρωση βάσης NCBI", command=self._update_db)
+        self.update_btn = ttk.Button(db, text="Ενημέρωση βάσης", command=self._update_db)
         self.update_btn.pack(side="right")
 
         run = ttk.Frame(self)
@@ -106,10 +117,14 @@ class App(tk.Tk):
         self.log_box.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
+    def _db_key(self):
+        return {v: k for k, v in DB_LABELS.items()}[self.db.get()]
+
     def _refresh_db_label(self):
-        d = zt.db_date()
-        self.db_label.config(text=f"Βάση NCBI: κατέβηκε {d}" if d else
-                             "Βάση NCBI: θα κατέβει στην πρώτη εκτέλεση (~8 MB)")
+        key = self._db_key()
+        d = zt.db_date(key)
+        self.db_label.config(text=f"κατέβηκε {d}" if d else
+                             f"θα κατέβει στην πρώτη εκτέλεση ({DB_SIZES[key]})")
 
     def _pick_fasta(self):
         path = filedialog.askopenfilename(
@@ -136,6 +151,7 @@ class App(tk.Tk):
         state = "disabled" if busy else "normal"
         self.run_btn.config(state=state)
         self.update_btn.config(state=state)
+        self.db_box.config(state="disabled" if busy else "readonly")
 
     # ------------------------------------------------------------ actions
     def _start(self, target, *args):
@@ -156,7 +172,10 @@ class App(tk.Tk):
         try:
             opts = dict(top=int(self.top.get()), species_id=float(self.species_id.get()),
                         genus_id=float(self.genus_id.get()), tie_delta=float(self.tie_delta.get()),
-                        threads=int(self.threads.get()), trim="auto" if self.trim.get() else "none")
+                        threads=int(self.threads.get()), trim="auto" if self.trim.get() else "none",
+                        min_cov=float(self.min_cov.get()), db=self._db_key())
+            if not 0 < opts["min_cov"] <= 1:
+                raise ValueError
         except (tk.TclError, ValueError):
             messagebox.showerror(APP_TITLE, "Μη έγκυρη τιμή στις ρυθμίσεις.")
             return
@@ -167,8 +186,8 @@ class App(tk.Tk):
     def _update_db(self):
         if self.worker and self.worker.is_alive():
             return
-        self._log("--- Ενημέρωση βάσης NCBI ---")
-        self._start(self._work_update)
+        self._log(f"--- Ενημέρωση βάσης {self.db.get()} ---")
+        self._start(self._work_update, self._db_key())
 
     # ------------------------------------------------- worker thread side
     def _emit(self, kind, value=None):
@@ -183,9 +202,9 @@ class App(tk.Tk):
         except Exception as e:  # report every failure in the window
             self._emit("error", f"{type(e).__name__}: {e}")
 
-    def _work_update(self):
+    def _work_update(self, db):
         try:
-            zt.ensure_db(update=True, log=lambda t: self._emit("log", t))
+            zt.ensure_db(update=True, log=lambda t: self._emit("log", t), db=db)
             self._emit("db_done")
         except Exception as e:
             self._emit("error", f"{type(e).__name__}: {e}")
@@ -249,6 +268,8 @@ def selftest(fasta, output):
     """Headless run used by the build to check the packaged .exe (no window)."""
     with open(output + ".log", "w", encoding="utf-8") as log:
         try:
+            if not os.path.exists(zt.resource_path(zt.GTDB_EXCLUDED)):
+                raise RuntimeError(f"{zt.GTDB_EXCLUDED} is not bundled")
             zt.run_pipeline(fasta, output, log=lambda t: print(t, file=log, flush=True))
         except Exception as e:
             print(f"FAILED: {type(e).__name__}: {e}", file=log)
