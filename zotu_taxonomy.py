@@ -475,8 +475,10 @@ def main():
     p.add_argument("--species-id", type=float, default=SPECIES_ID)
     p.add_argument("--genus-id", type=float, default=GENUS_ID)
     p.add_argument("--min-id", type=float, default=DEFAULTS["min_id"], help="minimum %% identity to keep a hit")
-    p.add_argument("--min-cov", type=float, default=DEFAULTS["min_cov"],
-                   help="minimum fraction of the zOTU that must align (default 0.9)")
+    p.add_argument("--min-cov", "--query-cov", "--query_cov", dest="min_cov", type=float,
+                   default=DEFAULTS["min_cov"],
+                   help="minimum fraction of the zOTU that must align, passed to vsearch "
+                        "--query_cov (0-1, default 0.9)")
     p.add_argument("--tie-delta", type=float, default=0.0,
                    help="species within this %% of the best hit count as tied (default 0 = exactly equal)")
     p.add_argument("--maxaccepts", type=int, default=DEFAULTS["maxaccepts"])
@@ -489,6 +491,8 @@ def main():
     p.add_argument("--keep-intermediate", action="store_true",
                    help="keep the trimmed query FASTA and raw vsearch hits")
     a = p.parse_args()
+    if not 0 < a.min_cov <= 1:
+        p.error("--min-cov must be a fraction between 0 and 1 (e.g. 0.99), not a percentage")
     opts = {k: v for k, v in vars(a).items() if k not in ("fasta", "output")}
     try:
         run_pipeline(a.fasta, a.output, **opts)

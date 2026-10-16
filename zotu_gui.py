@@ -41,6 +41,7 @@ class App(tk.Tk):
         self.species_id = tk.DoubleVar(value=zt.SPECIES_ID)
         self.genus_id = tk.DoubleVar(value=zt.GENUS_ID)
         self.tie_delta = tk.DoubleVar(value=0.0)
+        self.min_cov = tk.DoubleVar(value=zt.DEFAULTS["min_cov"])
         self.threads = tk.IntVar(value=zt.DEFAULTS["threads"])
         self.trim = tk.BooleanVar(value=True)
 
@@ -69,6 +70,7 @@ class App(tk.Tk):
             ("Όριο γένους (%):", self.genus_id, 80, 100, 0.1),
             ("Ανοχή ισοπαλίας (%):", self.tie_delta, 0, 3, 0.1),
             ("Threads (πυρήνες):", self.threads, 1, max(os.cpu_count() or 1, 1), 1),
+            ("Ελάχ. κάλυψη zOTU (0-1):", self.min_cov, 0.5, 1.0, 0.01),
         ]
         for i, (label, var, lo, hi, step) in enumerate(rows):
             r, c = divmod(i, 2)
@@ -76,7 +78,7 @@ class App(tk.Tk):
             ttk.Spinbox(opts, textvariable=var, from_=lo, to=hi, increment=step,
                         width=8).grid(row=r, column=c * 2 + 1, sticky="w", **pad)
         ttk.Checkbutton(opts, text="Αυτόματο κόψιμο υπολειμμάτων primer",
-                        variable=self.trim).grid(row=2, column=2, columnspan=2, sticky="w", **pad)
+                        variable=self.trim).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
 
         db = ttk.Frame(self)
         db.pack(fill="x", **pad)
@@ -156,7 +158,10 @@ class App(tk.Tk):
         try:
             opts = dict(top=int(self.top.get()), species_id=float(self.species_id.get()),
                         genus_id=float(self.genus_id.get()), tie_delta=float(self.tie_delta.get()),
-                        threads=int(self.threads.get()), trim="auto" if self.trim.get() else "none")
+                        threads=int(self.threads.get()), trim="auto" if self.trim.get() else "none",
+                        min_cov=float(self.min_cov.get()))
+            if not 0 < opts["min_cov"] <= 1:
+                raise ValueError
         except (tk.TclError, ValueError):
             messagebox.showerror(APP_TITLE, "Μη έγκυρη τιμή στις ρυθμίσεις.")
             return
