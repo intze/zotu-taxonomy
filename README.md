@@ -18,7 +18,8 @@
 
 ## Βάσεις αναφοράς
 
-Διαλέγεις μία βάση ανά εκτέλεση («Βάση αναφοράς» στο παράθυρο, `--db ncbi|silva` στη γραμμή εντολών).
+Διαλέγεις μία βάση ανά εκτέλεση («Βάση αναφοράς» στο παράθυρο, `--db ncbi|silva|gtdb|ncbi+gtdb` στη
+γραμμή εντολών).
 
 - **NCBI RefSeq (type strains)**, προεπιλογή: η συλλογή 16S rRNA Targeted Loci (~28.000 αλληλουχίες,
   ~21.000 είδη).
@@ -49,6 +50,11 @@
 
     Μόλυνση **μέσα στην ίδια κλάση** δεν εντοπίζεται (π.χ. *Stenotrophomonas* που ταιριάζει 100% με
     *E. coli*). Αν ένα αποτέλεσμα GTDB φαίνεται παράξενο, έλεγξε το φύλλο Top hits.
+- **NCBI, μετά GTDB για τα άγνωστα** (`--db ncbi+gtdb`), η προτεινόμενη επιλογή όταν υπάρχουν πολλά
+  ακαλλιέργητα: όλα τα zOTUs ψάχνονται στην NCBI. Όσα **δεν** φτάνουν σε είδος (No type strain,
+  Below genus threshold, Genus level only) ξαναψάχνονται στη GTDB, και το αποτέλεσμα της GTDB κρατιέται
+  μόνο αν δίνει **μεγαλύτερη** ομοιότητα. Στο Excel η στήλη **Database** λέει από πού προέρχεται κάθε
+  γραμμή, και οι στήλες **NCBI status** / **NCBI best identity (%)** κρατούν το αρχικό αποτέλεσμα της NCBI.
 
 ## Χρήση
 
@@ -102,6 +108,7 @@ Global alignment με vsearch v2.30.0 (`--usearch_global`, ταυτότητα χ
 pip install openpyxl
 python zotu_taxonomy.py zotus.fasta --threads 4
 python zotu_taxonomy.py zotus.fasta --db silva
+python zotu_taxonomy.py zotus.fasta --db ncbi+gtdb
 python zotu_taxonomy.py --help
 python zotu_gui.py
 ```

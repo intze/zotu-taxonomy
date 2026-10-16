@@ -42,19 +42,24 @@ runs it on Windows via the GUI. See README.md for usage and method.
    Waiting for the user's choice.
 2. Compare with EzBioCloud on 10–20 zOTUs the user already identified there.
 3. Confirm the Windows exe opens and shows Greek correctly on the user's PC.
-4. More databases requested. GTDB R232 is in (`--db gtdb`): bac120+ar53 `ssu_reps` (93,770 seqs,
-   ~68.9k placeholder species `Genus spNNN[u]` -> status "Species (GTDB placeholder)", purple fill).
-   Contaminating 16S in GTDB genomes (GTDB warns about it): unfiltered, B. subtilis had 26 Actinomycetes
-   vs 21 Bacilli hits within 1% (majority rules fail; a 99% self-search takes hours). Fix, chosen by
-   Claude with the user's go-ahead: precomputed `gtdb_r232_excluded.tsv` (shipped in the exe via
-   --add-data), built from bac120/ar53_metadata_r232: 5,900 'unverifiable' (ssu_reps 16S on another
-   contig than ssu_query_id) + 1,172 'class_conflict' (SILVA class of the 16S in <5% of that GTDB
-   class, >=95% identity). Same-class contamination is not caught (Stenotrophomonas tie with E. coli).
-   Regenerate the list if GTDB_RELEASE changes. Bundled lookup (resource_path/_MEIPASS) verified in a
-   Linux PyInstaller test app; the exe self-test fails if the list is not bundled.
-   LTP dropped (user's decision): moved to https://bioinfo.uib.es/ltp/, downloads need an e-mail
-   request via biocom.uib.es (blocked); no plain file links. The user wants one PR to `main`
-   with all new databases, so the exe gets the coverage option and databases together.
+4. Windows: test SILVA (~400 MB download), GTDB and the NCBI→GTDB mode in the exe.
+
+## Databases (`--db`, GUI "Βάση αναφοράς"; one per run)
+- `ncbi` (default), `silva` (SILVA 144 type strains), `gtdb` (GTDB R232 ssu_reps), and
+  `ncbi+gtdb`: NCBI for all zOTUs, then GTDB only for zOTUs that NCBI did not assign to a species
+  (No type strain / Below genus / Genus level only); the GTDB row replaces the NCBI row only when its
+  best identity is higher. Excel gets "Database", "NCBI status", "NCBI best identity (%)".
+  Genus level only was included because test zOTUs from GTDB placeholders were 95-96% to NCBI
+  but 100% to GTDB. Recommended to the user: NCBI as main, GTDB for unassigned, SILVA as cross-check.
+- GTDB: ~68.9k placeholder species (`Genus spNNN[u]`) -> status "Species (GTDB placeholder)", purple.
+  GTDB 16S can be contamination (unfiltered, B. subtilis had 26 Actinomycetes vs 21 Bacilli hits
+  within 1%; majority rules fail; a 99% self-search takes hours). `gtdb_r232_excluded.tsv` (shipped in
+  the exe via --add-data; self-test fails without it) drops 5,900 'unverifiable' (ssu_reps 16S on
+  another contig than ssu_query_id) + 1,172 'class_conflict' (SILVA class of the 16S in <5% of that
+  GTDB class, >=95% identity), built from bac120/ar53_metadata_r232. Same-class contamination is not
+  caught (Stenotrophomonas tie with E. coli). Regenerate the list if GTDB_RELEASE changes.
+- LTP dropped (user's decision): moved to https://bioinfo.uib.es/ltp/, downloads need an e-mail
+  request via biocom.uib.es; no plain file links.
 
 ## Environment notes (Claude Code cloud sessions)
 - `ftp.ncbi.nlm.nih.gov`, `www.arb-silva.de`, `data.gtdb.ecogenomic.org`, `bioinfo.uib.es` must be in the environment's

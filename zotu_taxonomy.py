@@ -67,6 +67,11 @@ DATABASES = {
     "gtdb": f"GTDB R{GTDB_RELEASE} 16S of species representative genomes (bacteria + archaea; "
             "GTDB names, including placeholder species from uncultured genomes)",
 }
+# Two-step search: NCBI for every zOTU, then GTDB for those NCBI does not assign to a species
+DATABASES["ncbi+gtdb"] = (DATABASES["ncbi"] + "; zOTUs not assigned to a species "
+                          "re-searched against " + DATABASES["gtdb"] + ", kept when GTDB gives a "
+                          "higher identity")
+FALLBACK_STATUSES = ("No type strain", "Below genus threshold", "Genus level only")
 
 # Identity thresholds (Yarza et al. 2014, Nat Rev Microbiol; Kim et al. 2014, IJSEM).
 # NOTE: defined for full-length 16S; for short amplicons they are only indicative.
@@ -337,6 +342,10 @@ def _build_gtdb(db_dir, fo, w, log):
 
 def ensure_db(update=False, log=print, db="ncbi"):
     """Returns (fasta_path, names_tsv_path). Builds them on first run."""
+    if "+" in db and db in DATABASES:  # two-step choice: prepare each database
+        for part in db.split("+"):
+            ensure_db(update, log, part)
+        return None
     if db not in DATABASES:
         raise RuntimeError(f"Unknown database '{db}' (choose from: {', '.join(DATABASES)})")
     db_dir, fasta, names, date_file = db_paths(db)
@@ -481,22 +490,27 @@ def classify(hits_tsv, names_tsv, order, lengths, top_n, species_id, genus_id, t
 # Output
 # --------------------------------------------------------------------------- #
 def write_output(results, out_path, top_n, settings, log=print):
+    two_step = any("ncbi_status" in r for r in results)
     header = ["zOTU", "Length (bp)", "Best identity (%)", "Status",
-              "Assigned species", "Assigned genus", "Species tied at best %"]
+              "Assigned species", "Assigned genus", "Species tied at best %", "Database"]
+    if two_step:
+        header += ["NCBI status", "NCBI best identity (%)"]
     for i in range(1, top_n + 1):
         header += [f"Species {i}", f"Identity {i} (%)", f"Accession {i}"]
     summary = []
     for r in results:
         line = [r["zOTU"], r["length"], r["best_id"], r["status"],
-                r["assigned_species"], r["assigned_genus"], r["n_tied"]]
+                r["assigned_species"], r["assigned_genus"], r["n_tied"], r["db"]]
+        if two_step:
+            line += [r["ncbi_status"], r["ncbi_best_id"]]
         for sp, (ident, alnlen, qcov, acc) in r["hits"]:
             line += [sp, ident, acc]
         line += [""] * (len(header) - len(line))
         summary.append(line)
 
     long_header = ["zOTU", "Rank", "Species", "Identity (%)", "Alignment length",
-                   "Query coverage (%)", "Accession"]
-    long_rows = [[r["zOTU"], i, sp, ident, alnlen, qcov, acc]
+                   "Query coverage (%)", "Accession", "Database"]
+    long_rows = [[r["zOTU"], i, sp, ident, alnlen, qcov, acc, r["db"]]
                  for r in results
                  for i, (sp, (ident, alnlen, qcov, acc)) in enumerate(r["hits"], 1)]
 
@@ -558,22 +572,6 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
     base = os.path.splitext(out)[0]
     vsearch = ensure_vsearch(log)
 
-    if o["db_fasta"]:
-        db_fasta = o["db_fasta"]
-        names = base + "_custom_names.tsv"
-        with open(db_fasta, encoding="utf-8", errors="replace") as fi, \
-                open(names, "w", newline="", encoding="utf-8") as fn:
-            w = csv.writer(fn, delimiter="\t")
-            w.writerow(["accession", "species", "description"])
-            for line in fi:
-                if line.startswith(">"):
-                    d = line[1:].strip()
-                    w.writerow([d.split()[0], parse_ncbi_name(d), d])
-        date = "custom"
-    else:
-        db_fasta, names = ensure_db(o["update_db"], log, o["db"])
-        date = db_date(o["db"])
-
     seqs = read_fasta(fasta)
     if not seqs:
         raise RuntimeError(f"No sequences found in {fasta}")
@@ -588,19 +586,64 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
     else:
         left, right = (int(x) for x in str(o["trim"]).split(","))
         notes = [f"manual: left {left} bp, right {right} bp"]
-    query = base + "_query.fasta"
-    with open(query, "w") as f:
-        for k, s in seqs.items():
-            f.write(f">{k}\n{s[left:len(s) - right]}\n")
+    trimmed = {k: s[left:len(s) - right] for k, s in seqs.items()}
     log("Primer trimming: " + ("; ".join(notes) if notes else "none"))
 
-    hits = base + "_vsearch_hits.tsv"
-    run_vsearch(vsearch, query, db_fasta, hits, o["threads"], o["min_id"], o["min_cov"],
-                o["maxaccepts"], o["maxrejects"], log, progress)
-    no_hit = ("No reference >= min identity" if o["db"] == "gtdb" and not o["db_fasta"]
-              else "No type strain >= min identity")
-    results = classify(hits, names, order, lengths, o["top"], o["species_id"],
-                       o["genus_id"], o["tie_delta"], no_hit)
+    temp = []
+
+    def search(db, ids, step):
+        """Searches the zOTUs `ids` against one database; returns classify() rows."""
+        if o["db_fasta"]:
+            db_fasta, names, label = o["db_fasta"], base + "_custom_names.tsv", "custom"
+            with open(db_fasta, encoding="utf-8", errors="replace") as fi, \
+                    open(names, "w", newline="", encoding="utf-8") as fn:
+                w = csv.writer(fn, delimiter="\t")
+                w.writerow(["accession", "species", "description"])
+                for line in fi:
+                    if line.startswith(">"):
+                        d = line[1:].strip()
+                        w.writerow([d.split()[0], parse_ncbi_name(d), d])
+            temp.append(names)
+        else:
+            db_fasta, names = ensure_db(o["update_db"], log, db)
+            label = {"ncbi": "NCBI", "silva": f"SILVA {SILVA_RELEASE}",
+                     "gtdb": f"GTDB R{GTDB_RELEASE}"}[db]
+        query, hits = base + f"_query{step}.fasta", base + f"_vsearch_hits{step}.tsv"
+        temp.extend((query, hits))
+        with open(query, "w") as f:
+            for k in ids:
+                f.write(f">{k}\n{trimmed[k]}\n")
+        run_vsearch(vsearch, query, db_fasta, hits, o["threads"], o["min_id"], o["min_cov"],
+                    o["maxaccepts"], o["maxrejects"], log, progress)
+        no_hit = ("No reference >= min identity" if db == "gtdb" and not o["db_fasta"]
+                  else "No type strain >= min identity")
+        rows = classify(hits, names, ids, lengths, o["top"], o["species_id"],
+                        o["genus_id"], o["tie_delta"], no_hit)
+        for r in rows:
+            r["db"] = label
+        return rows
+
+    dbs = o["db"].split("+")
+    if len(dbs) > 1 and o["db_fasta"]:
+        log("Custom reference FASTA given: the second (GTDB) step is skipped")
+    results = search(dbs[0], order, "")
+    if len(dbs) > 1 and not o["db_fasta"]:
+        for r in results:
+            r["ncbi_status"], r["ncbi_best_id"] = r["status"], r["best_id"]
+        redo = [r["zOTU"] for r in results if r["status"].startswith(FALLBACK_STATUSES)]
+        log(f"{len(redo)} zOTUs not assigned to a species with NCBI: "
+            f"searching them against GTDB R{GTDB_RELEASE}")
+        if redo:
+            second = {r["zOTU"]: r for r in search(dbs[1], redo, "_gtdb")}
+            replaced = 0
+            for i, r in enumerate(results):
+                g = second.get(r["zOTU"])
+                if g and g["best_id"] is not None and (r["best_id"] is None or
+                                                       g["best_id"] > r["best_id"]):
+                    g["ncbi_status"], g["ncbi_best_id"] = r["ncbi_status"], r["ncbi_best_id"]
+                    results[i] = g
+                    replaced += 1
+            log(f"  GTDB gave a higher identity for {replaced} of them")
 
     counts = defaultdict(int)
     for r in results:
@@ -609,8 +652,9 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
 
     settings = {
         "Input": os.path.abspath(fasta),
-        "Reference database": db_fasta if o["db_fasta"] else DATABASES[o["db"]],
-        "Database downloaded": date,
+        "Reference database": o["db_fasta"] if o["db_fasta"] else DATABASES[o["db"]],
+        "Database downloaded": "custom" if o["db_fasta"] else
+            "; ".join(f"{d}: {db_date(d)}" for d in dbs),
         "Aligner": "vsearch --usearch_global (global alignment, terminal gaps ignored), strand both",
         "Species threshold (%)": o["species_id"],
         "Genus threshold (%)": o["genus_id"],
@@ -624,7 +668,7 @@ def run_pipeline(fasta, output=None, log=print, progress=None, **options):
     }
     written = write_output(results, out, o["top"], settings, log)
     if not o["keep_intermediate"]:
-        for p in (query, hits) + ((names,) if o["db_fasta"] else ()):
+        for p in temp:
             try:
                 os.remove(p)
             except OSError:
@@ -653,8 +697,9 @@ def main():
                    help="primer remnants: 'auto' (default), 'none', or 'LEFT,RIGHT' bases e.g. 7,9")
     p.add_argument("--db", choices=list(DATABASES), default=DEFAULTS["db"],
                    help="reference database: 'ncbi' (default), 'silva' "
-                        f"(SILVA {SILVA_RELEASE} type strains, ~400 MB download once) or 'gtdb' "
-                        f"(GTDB R{GTDB_RELEASE} species representatives, GTDB names)")
+                        f"(SILVA {SILVA_RELEASE} type strains, ~400 MB download once), 'gtdb' "
+                        f"(GTDB R{GTDB_RELEASE} species representatives, GTDB names) or "
+                        "'ncbi+gtdb' (NCBI, then GTDB for zOTUs NCBI does not assign to a species)")
     p.add_argument("--db-fasta", help="use your own reference FASTA instead "
                    "(headers: >accession Genus species ...)")
     p.add_argument("--update-db", action="store_true", help="re-download the selected database")

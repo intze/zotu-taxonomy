@@ -14,8 +14,10 @@ import zotu_taxonomy as zt
 
 APP_TITLE = "zOTU Taxonomy (16S type strains)"
 DB_LABELS = {"ncbi": "NCBI RefSeq (type strains)", "silva": f"SILVA {zt.SILVA_RELEASE} (type strains)",
-             "gtdb": f"GTDB R{zt.GTDB_RELEASE} (και placeholder)"}
-DB_SIZES = {"ncbi": "~8 MB", "silva": "~400 MB, μία φορά", "gtdb": "~31 MB"}
+             "gtdb": f"GTDB R{zt.GTDB_RELEASE} (και placeholder)",
+             "ncbi+gtdb": "NCBI, μετά GTDB για τα άγνωστα"}
+DB_SIZES = {"ncbi": "~8 MB", "silva": "~400 MB, μία φορά", "gtdb": "~31 MB",
+            "ncbi+gtdb": "~8 + 31 MB"}
 
 
 def open_path(path):
@@ -88,7 +90,7 @@ class App(tk.Tk):
         db.pack(fill="x", **pad)
         ttk.Label(db, text="Βάση αναφοράς:").pack(side="left")
         self.db_box = ttk.Combobox(db, textvariable=self.db, values=list(DB_LABELS.values()),
-                                   state="readonly", width=24)
+                                   state="readonly", width=30)
         self.db_box.pack(side="left", padx=8)
         self.db_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh_db_label())
         self.db_label = ttk.Label(db, text="")
@@ -122,8 +124,8 @@ class App(tk.Tk):
 
     def _refresh_db_label(self):
         key = self._db_key()
-        d = zt.db_date(key)
-        self.db_label.config(text=f"κατέβηκε {d}" if d else
+        dates = [zt.db_date(part) for part in key.split("+")]
+        self.db_label.config(text=f"κατέβηκε {max(dates)}" if all(dates) else
                              f"θα κατέβει στην πρώτη εκτέλεση ({DB_SIZES[key]})")
 
     def _pick_fasta(self):
