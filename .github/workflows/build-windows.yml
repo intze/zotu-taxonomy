@@ -60,8 +60,20 @@ jobs:
           name: ZotuTaxonomy-windows
           path: ZotuTaxonomy-windows.zip
 
-      - name: Publish release (tags only)
+      - name: Publish release (version tags)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" ZotuTaxonomy-windows.zip --title "ZotuTaxonomy ${{ github.ref_name }}" --notes "Windows build. Download ZotuTaxonomy-windows.zip, unzip, run ZotuTaxonomy.exe."
+
+      - name: Update the "latest" release (main branch)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE = 0
+          gh release create latest ZotuTaxonomy-windows.zip --target "${{ github.sha }}" --latest `
+            --title "ZotuTaxonomy (latest build)" `
+            --notes "Windows build from commit ${{ github.sha }}. Download ZotuTaxonomy-windows.zip, unzip, run ZotuTaxonomy.exe."
