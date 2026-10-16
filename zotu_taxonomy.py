@@ -55,6 +55,8 @@ GTDB_URL = (f"https://data.gtdb.ecogenomic.org/releases/release{GTDB_RELEASE}/{G
             "genomic_files_reps/")
 GTDB_FILES = (GTDB_URL + f"bac120_ssu_reps_r{GTDB_RELEASE}.fna.gz",
               GTDB_URL + f"ar53_ssu_reps_r{GTDB_RELEASE}.fna.gz")
+# 16S sequences left out of GTDB as unverifiable or likely contamination (see the file header)
+GTDB_EXCLUDED = f"gtdb_r{GTDB_RELEASE}_excluded.tsv"
 # GTDB names species without a Latin name after a genome, e.g. 'UBA1847 sp963842765'
 PLACEHOLDER = re.compile(r"^\S+ sp\d+u?$")
 
@@ -83,6 +85,11 @@ def app_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def resource_path(name):
+    """A file shipped with the program (inside the .exe when frozen with PyInstaller)."""
+    return os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), name)
 
 
 def data_dir():
@@ -297,8 +304,13 @@ def _build_silva(db_dir, fo, w, log):
 def _build_gtdb(db_dir, fo, w, log):
     """One 16S per GTDB species (the longest copy in its representative genome).
     Header: >RS_GCF_000001.1 d__Bacteria;...;g__Genus;s__Genus species [locus_tag=...] ..."""
+    excluded_file = resource_path(GTDB_EXCLUDED)
+    if not os.path.exists(excluded_file):
+        raise RuntimeError(f"{GTDB_EXCLUDED} is missing; it must ship with the program")
+    with open(excluded_file, encoding="utf-8") as f:
+        excluded = {line.split("\t")[0] for line in f if line[0] != "#"}
     log(f"Downloading GTDB R{GTDB_RELEASE} 16S (about 31 MB):")
-    n = 0
+    n, dropped, keep = 0, 0, False
     for url in GTDB_FILES:
         gz = os.path.join(db_dir, os.path.basename(url))
         download(url, gz, log)
@@ -306,14 +318,20 @@ def _build_gtdb(db_dir, fo, w, log):
             for line in fi:
                 if line.startswith(">"):
                     acc, _, rest = line[1:].rstrip("\n").partition(" ")
+                    keep = acc not in excluded
+                    if not keep:
+                        dropped += 1
+                        continue
                     tax = rest.split(" [")[0]
                     species = tax.rpartition(";s__")[2].strip() or "unknown"
                     w.writerow([acc, species, tax])
                     fo.write(f">{acc}\n")
                     n += 1
-                else:
+                elif keep:
                     fo.write(line.strip().upper() + "\n")
         os.remove(gz)
+    log(f"  {dropped} sequences left out as unverifiable or likely contamination "
+        f"(listed in {GTDB_EXCLUDED})")
     return n
 
 

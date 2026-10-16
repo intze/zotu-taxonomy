@@ -14,7 +14,7 @@ import zotu_taxonomy as zt
 
 APP_TITLE = "zOTU Taxonomy (16S type strains)"
 DB_LABELS = {"ncbi": "NCBI RefSeq (type strains)", "silva": f"SILVA {zt.SILVA_RELEASE} (type strains)",
-             "gtdb": f"GTDB R{zt.GTDB_RELEASE} (όλα τα είδη)"}
+             "gtdb": f"GTDB R{zt.GTDB_RELEASE} (και placeholder)"}
 DB_SIZES = {"ncbi": "~8 MB", "silva": "~400 MB, μία φορά", "gtdb": "~31 MB"}
 
 

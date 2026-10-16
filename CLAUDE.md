@@ -44,13 +44,15 @@ runs it on Windows via the GUI. See README.md for usage and method.
 3. Confirm the Windows exe opens and shows Greek correctly on the user's PC.
 4. More databases requested. GTDB R232 is in (`--db gtdb`): bac120+ar53 `ssu_reps` (93,770 seqs,
    ~68.9k placeholder species `Genus spNNN[u]` -> status "Species (GTDB placeholder)", purple fill).
-   OPEN PROBLEM: contaminating 16S in GTDB genomes (GTDB warns about it). On the example, Staph/E. coli/
-   P. aeruginosa tie at 100% with Alphaproteobacteria/Collinsella; B. subtilis has 26 Actinomycetes vs
-   21 Bacilli hits within 1%, so a majority rule fails. Self-search at 99% takes hours (not usable).
-   Proposed: compare `ssu_silva_taxonomy` vs `gtdb_taxonomy` (phylum/class) from
-   bac120/ar53_metadata_r232.tsv.gz (~283 MB); waiting for the user: precomputed exclusion list in
-   the repo (a) vs download on the user's PC (b).
-   LTP moved to https://bioinfo.uib.es/ltp/ (old imedea URL redirects); the proxy still rejects it. The user wants one PR to `main`
+   Contaminating 16S in GTDB genomes (GTDB warns about it): unfiltered, B. subtilis had 26 Actinomycetes
+   vs 21 Bacilli hits within 1% (majority rules fail; a 99% self-search takes hours). Fix, chosen by
+   Claude with the user's go-ahead: precomputed `gtdb_r232_excluded.tsv` (shipped in the exe via
+   --add-data), built from bac120/ar53_metadata_r232: 5,900 'unverifiable' (ssu_reps 16S on another
+   contig than ssu_query_id) + 1,172 'class_conflict' (SILVA class of the 16S in <5% of that GTDB
+   class, >=95% identity). Same-class contamination is not caught (Stenotrophomonas tie with E. coli).
+   Regenerate the list if GTDB_RELEASE changes. Frozen-exe loading of the list is untested.
+   LTP dropped (user's decision): moved to https://bioinfo.uib.es/ltp/, downloads need an e-mail
+   request via biocom.uib.es (blocked); no plain file links. The user wants one PR to `main`
    with all new databases, so the exe gets the coverage option and databases together.
 
 ## Environment notes (Claude Code cloud sessions)
